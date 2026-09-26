@@ -52,11 +52,17 @@ jobs:
           import glob, re, sys, yaml
           # Attacker-controllable contexts; GitHub expressions are case-insensitive.
           INJ = re.compile(r"\$\{\{[^}]*(github\.event\.(issue|comment|pull_request|review|review_comment|discussion|head_commit|commits|pages|workflow_run)\b[^}]*\b(title|body|message|ref|label|name|email|default_branch|page_name|head_branch)\b|github\.head_ref)[^}]*\}\}", re.I)
-          DUMP = re.compile(r"tojson\(\s*secrets\s*\)", re.I)
+          DUMP = re.compile(r"\$\{\{[^}]*tojson\(\s*secrets\s*\)", re.I)
           HEADREF = re.compile(r"github\.event\.pull_request\.head\.(sha|ref)|github\.head_ref|refs/pull/|github\.event\.number|pull_request\.number", re.I)
           fail = 0
           def err(f, msg):
               global fail; fail = 1; print(f"::error file={f}::{msg}")
+          def strings(node):
+              if isinstance(node, dict):
+                  for v in node.values(): yield from strings(v)
+              elif isinstance(node, list):
+                  for v in node: yield from strings(v)
+              elif isinstance(node, str): yield node
           def walk(node, path, f):
               if isinstance(node, dict):
                   for k, v in node.items():
@@ -67,13 +73,15 @@ jobs:
                   for i, v in enumerate(node): walk(v, path+[str(i)], f)
           for f in sorted(glob.glob(".github/workflows/*.y*ml") + glob.glob("**/action.y*ml", recursive=True)):
               text = open(f, encoding="utf-8", errors="replace").read()
-              if DUMP.search(text): err(f, "dumps secrets context (toJSON(secrets))")
               try: doc = yaml.safe_load(text)
               except Exception as e: err(f, f"unparseable YAML: {e}"); continue
               if not isinstance(doc, dict): continue
+              # Only parsed values count, so comments and the gate's own messages never trigger.
+              vals = "\n".join(strings(doc))
+              if DUMP.search(vals): err(f, "dumps the whole secrets context via toJSON")
               on = doc.get("on", doc.get(True))
               trig = on if isinstance(on, (list, dict)) else [on]
-              if "pull_request_target" in trig and HEADREF.search(text):
+              if "pull_request_target" in trig and HEADREF.search(vals):
                   err(f, "pull_request_target with PR-head reference")
               walk(doc, [], f)
           sys.exit(fail)
