@@ -1,0 +1,54 @@
+name: Security Gate (public) / PR & Push Scan
+# Org-required workflow for PUBLIC FINGU-GRINDA repos (org ruleset "Security Gate · public repos").
+# Public repos cannot run workflows from the private FINGU-GRINDA/security-gate, and must never
+# run PR code on self-hosted runners. This lightweight gate runs on GitHub-hosted runners,
+# uses no secrets, read-only token, pull_request only (never pull_request_target).
+# Layers: 1) secrets in the PR/push commit range (gitleaks, OSS)  2) dangerous Actions patterns.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+  merge_group:
+permissions:
+  contents: read
+jobs:
+  scan:
+    name: public-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks
+        env:
+          V: 8.28.0
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+      - name: Secrets (gitleaks, commit range)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -n "$BASE" ] && [ "$BASE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BASE" 2>/dev/null; then
+            OPTS="--log-opts=$BASE..$HEAD"
+          else
+            OPTS="--log-opts=-1 $HEAD"
+          fi
+          gitleaks git . $OPTS --redact --no-banner --exit-code 1 -v
+      - name: Actions (block pull_request_target + head checkout, template injection)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          fail=0
+          files=$(ls .github/workflows/*.y*ml 2>/dev/null || true)
+          for f in $files; do
+            if grep -q 'pull_request_target' "$f" && grep -Eq 'github\.event\.pull_request\.head\.(sha|ref)|github\.head_ref' "$f"; then
+              echo "::error file=$f::pull_request_target with PR-head reference"; fail=1; fi
+            if grep -En '^\s*(run|script):.*\$\{\{\s*github\.event\.(issue|comment|pull_request|review|head_commit|commits)[^}]*(title|body|message|head\.ref|label|name)' "$f"; then
+              echo "::error file=$f::template injection of github.event.* in run/script"; fail=1; fi
+            if grep -En 'toJSON\(\s*secrets\s*\)' "$f"; then echo "::error file=$f::dumps secrets context"; fail=1; fi
+          done
+          exit $fail
