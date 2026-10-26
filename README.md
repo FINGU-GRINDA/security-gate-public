@@ -14,6 +14,10 @@
 
 ---
 
+## 요약
+
+FINGU-GRINDA 공개(public) 레포 전체에 org ruleset 으로 강제되는 필수 체크 `public-gate` 의 워크플로 하나만 담은 레포다. private 보안 게이트(`security-gate`)는 GitHub 정책상 공개 레포에서 돌 수 없어서, 공개 레포는 이 워크플로가 GitHub-hosted 러너에서 시크릿 없이 gitleaks 시크릿 스캔과 위험한 GitHub Actions 패턴(template injection, `pull_request_target` + PR head checkout, `toJSON(secrets)`) 검사를 한다. 2026-09 에 만들어 운영 중이며, 공개 레포를 추가하거나 private ↔ public 을 바꿀 때 아래 Operations 절차를 따른다.
+
 조직의 기본 보안 게이트는 private 레포(`security-gate`)에 있다. 공개 레포는 그 게이트를 쓸 수 없어서, 이 레포의
 `.github/workflows/public-gate.yml`(체크명 **`public-gate`**)이 org ruleset 으로 공개 레포 전체에 강제된다.
 
